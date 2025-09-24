@@ -401,8 +401,28 @@ These are required before any inference method can be attempted.
 """
 
 class frozen_prior:
-    # Placeholder for the prior distribution.
-    # Hint: you may want to add input parameters to these methods.
+  def __init__(self,
+                 alpha_S=2.0, theta_S=500.0,    # Prior for baseline signal S0
+                 alpha_L=4.0, theta_L=2.5e-4,   # Prior for eigenvalues λ1..λ3
+                 random_state=None):
+        # Store hyperparameters
+        self.alpha_S = float(alpha_S)
+        self.theta_S = float(theta_S)
+        self.alpha_L = float(alpha_L)
+        self.theta_L = float(theta_L)
+
+        self._gamma_S= = gamma(a=self.alpha_S, scale=self.theta_S)
+        self._gamma_L = gamma(a=self.alpha_L, scale=self.theta_L)
+
+        self.random_state = (np.random.RandomState(random_state)
+                             if random_state is not None else np.random)
+
+  def rvs(self, size=1):
+    # draw prior samples
+    size = int(size)
+    # S0 = Gamma(alpha_S, theta_S)
+    S0 = self._gamma_S0.rvs(size=size, random_state=self.random_state).as
+                 
 
     def __init__(self):
         raise NotImplementedError
@@ -680,4 +700,5 @@ def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
 
 
 if __name__ == "__main__":
+
     main()
