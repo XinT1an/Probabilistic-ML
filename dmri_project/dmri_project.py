@@ -402,8 +402,8 @@ These are required before any inference method can be attempted.
 
 class frozen_prior:
   def __init__(self,
-                 alpha_S=2.0, theta_S=500.0,    # Prior for baseline signal S0
-                 alpha_L=4.0, theta_L=2.5e-4,   # Prior for eigenvalues λ1..λ3
+                 alpha_S=2.0, theta_S=500.0,    
+                 alpha_L=4.0, theta_L=2.5e-4,   
                  random_state=None):
         # Store hyperparameters
         self.alpha_S = float(alpha_S)
@@ -421,17 +421,38 @@ class frozen_prior:
     # draw prior samples
     size = int(size)
     # S0 = Gamma(alpha_S, theta_S)
-    S0 = self._gamma_S0.rvs(size=size, random_state=self.random_state).as
-                 
+    S0 = self._gamma_S0.rvs(size=size, random_state=self.random_state).astype(float)
+    # Lambdai = iid Gamma(alpha_Lambda, theta_Lambda)
+    # eigen values
+    evals = self_gamma_L.rvs(size=(size, 3), random_state=self.random_state).astype(float)
+    # V= Uniform(S0(3))
+    Vs = Rotation.random(size=size, ransom_state=self.random_state).as_matrix().astype(float)
 
-    def __init__(self):
-        raise NotImplementedError
+    order = np.argsort(evals, axis=1)[:, ::-1]
+    evals_sorted = np.take_along_axis(evals, order, axis=1) # eigenvalues sorted in descending order
+
+    # columns of V match the sorted eigenvalues
+    evecs_sorted = np.stack(
+      [Vs[i][:, order[i]] for i in range(size)],
+      axis=0
+    )
+    return S0.reshape(size,), evals_sorted.reshape(size, 3), evecs_sorted.reshape(size, 3, 3)
+                 
     
-    def rvs(self):
-        raise NotImplementedError
-    
-    def logpdf(self):
-        raise NotImplementedError
+    def logpdf(self, S0, evecs=None, evals=None, D=None):
+      S0 = np.asarray(S0, dtype=float).reshape(-1)
+      evals = np.asarray(evals, dtype=float).reshape(-1, 3)
+      # ensure batch sizes line up
+      B = max(S0.shape[0], evals.shape[0])
+      if S0.shape[0] == 1 and B > 1:
+        S0 = np.repeat(S0, B)
+      if evals.shape[0] == 1 and B > 1:
+        evals = np.repeat(evals, B, axis=0)
+      # log-gamma for S0 and each lambda
+      lp_S0 = self._gamma_S0.logpdf(S0)
+      lp_l = np.sum(self._gamma_l.logpdf(evals), axis=1)
+      return (lp_S0 + lp_l).reshape(B,)
+        
 
 
 class frozen_likelihood:
@@ -702,3 +723,4 @@ def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
 if __name__ == "__main__":
 
     main()
+
