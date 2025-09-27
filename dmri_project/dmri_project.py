@@ -459,11 +459,14 @@ class frozen_likelihood:
     # Placeholder for the likelihood (with partial code provided).
     # Hint: you may want to add input parameters to these methods.
 
-    def __init__(self, gtab):
+    def __init__(self, y, gtab, sigma=29):
+        self.y = np.asarray(y, dtype=float).reshape(-1)
         self.gtab = gtab   # store gradient table with b-values and b-vectors
-
-        raise NotImplementedError
-
+        self.sigma2 = float(sigma) ** 2
+        self.n = self.y.size
+        #norm constant
+        self._log_norm_const = -0.5*self.n*np.log(2.0*np.pi*self.sigma2)
+      
     def logpdf(self, S0, evecs, evals):
         S0 = np.atleast_1d(S0)        # ensure S0 is array-like
         D = compute_D(evals, evecs)   # reconstruct diffusion tensor
@@ -474,6 +477,13 @@ class frozen_likelihood:
 
         # Model signal S given tensor D and baseline S0
         S = S0[:, None] * np.exp( - np.einsum('...j, ijk, ...k->i...', q, D, q))
+
+        S = np.atleast_2d(S)
+        y = self.y[None, :]
+        resid = y - S
+        sq = np.sum(resid*resid, axis=1)
+        ll = self._log_norm_const - 0.5 *sq/self.sigma2
+        return ll.squeeze()
         
         raise NotImplementedError
 
@@ -542,11 +552,46 @@ class mvn_reparameterized:
     # Placeholder for multivariate normal approximation.
     # Hint: you may want to add input parameters to these methods.
     
-    def __init__(self):
-        raise NotImplementedError
+    def __init__(self, theta_mean, theta_cov):
+        self.theta_mean = np.asarray(theta_mean, dtype=float).reshape(-1)
+        self.theta_cov = np.asarray(theta_cov, dtype=float)
+
+    
+        assert self.theta_mean.shape[0] == 7, 
+        assert self.theta_cov.shape == (7, 7), 
+        
     
     def rvs(self, size):
-        raise NotImplementedError
+        size = int(size)
+        # Sample θ from N(θ̂, Σθ)
+        thetas = np.random.multivariate_normal(self.theta_mean, self.theta_cov, size=size)  # (size, 7)
+
+        # Allocate outputs
+        S0_samples   = np.zeros((size,), dtype=float)
+        evals_samples = np.zeros((size, 3), dtype=float)
+        evecs_samples = np.zeros((size, 3, 3), dtype=float)
+
+        for i in range(size):
+            t = thetas[i]
+
+            # Map θ -> S0 and L (lower-triangular with exp on diagonals)
+            S0 = np.exp(t[0])
+            L = np.array([[np.exp(t[1]), 0.0,           0.0],
+                          [t[2],         np.exp(t[3]),  0.0],
+                          [t[4],         t[5],          np.exp(t[6])]], dtype=float)
+            D = L @ L.T
+
+            # Eigendecompose D, sort eigenvalues descending, reorder eigenvectors accordingly
+            w, V = np.linalg.eigh(D)
+            order = np.argsort(w)[::-1]
+            evals = w[order]
+            evecs = V[:, order]
+
+            # Store
+            S0_samples[i]    = S0
+            evals_samples[i] = evals
+            evecs_samples[i] = evecs
+
     
         return S0_samples, evals_samples, evecs_samples
 
@@ -602,9 +647,93 @@ def laplace_approximation():
     # Note: you may change, add, or remove input parameters depending on your design
     # (e.g. pass initialization values like those prepared in main()).
 
-    raise NotImplementedError
+    # 1) Data, prior, likelihood
+    y, point_estimate, gtab = get_preprocessed_data(force_recompute=False)
+    S0_init, evals_init, evecs_init = point_estimate
+    D_init = compute_D(evals_init, evecs_init).squeeze()
 
-    return mvn_reparameterized(...)
+    prior = frozen_prior(     # Table 1 defaults (Gamma-Gamma + Uniform SO(3))
+        alpha_S=2.0, theta_S=500.0,
+        alpha_L=4.0, theta_L=2.5e-4
+    )
+    like = frozen_likelihood(y=y, gtab=gtab, sigma=29.0)  # Table 1: σ=29
+
+    # 2) Initialize θ from the DTI point estimate
+    #    θ = [θ_S0, θ_11, θ_21, θ_22, θ_31, θ_32, θ_33]
+    L0 = np.linalg.cholesky(D_init)
+    theta0 = np.array([
+        np.log(S0_init if np.ndim(S0_init)==0 else float(np.squeeze(S0_init))),
+        np.log(L0[0, 0]),
+        L0[1, 0],
+        np.log(L0[1, 1]),
+        L0[2, 0],
+        L0[2, 1],
+        np.log(L0[2, 2]),
+    ], dtype=float)
+
+    # 3) Define the negative log-posterior in θ-space
+    def unpack_theta(theta):
+        # Map θ -> (S0, D)
+        S0 = np.exp(theta[0])
+        L = np.array([[np.exp(theta[1]), 0.0,             0.0],
+                      [theta[2],         np.exp(theta[3]), 0.0],
+                      [theta[4],         theta[5],         np.exp(theta[6])]], dtype=float)
+        D = L @ L.T
+        return S0, D
+
+    def neg_log_post(theta):
+        S0, D = unpack_theta(theta)
+
+        # Eigendecompose D -> (evals, evecs) for prior and likelihood
+        w, V = np.linalg.eigh(D)
+        order = np.argsort(w)[::-1]
+        evals = w[order][None, :]         # (1,3)
+        evecs = V[:, order][None, :, :]   # (1,3,3)
+        S0b   = np.array([S0], dtype=float)
+
+        # log prior: p(S0) * ∏ p(λ_i) * p(V)   (Uniform(SO(3)) adds a constant -> ignored)
+        lp = prior.logpdf(S0b, evals=evals, evecs=evecs).squeeze()
+
+        # log likelihood: N(y; S(S0, D), σ^2 I)
+        ll = like.logpdf(S0b, evecs, evals).squeeze()
+
+        return -(lp + ll)   # minimize negative log-posterior
+
+    # 4) Optimize θ to get the MAP estimate (θ̂)
+    res = minimize(neg_log_post, theta0, method='L-BFGS-B', options=dict(maxiter=500))
+    theta_hat = res.x
+
+    # 5) Numerical Hessian of the negative log-posterior at θ̂ (central differences)
+    def numerical_hessian(f, x, h=1e-4):
+        x = np.asarray(x, dtype=float)
+        n = x.size
+        H = np.zeros((n, n), dtype=float)
+        I = np.eye(n)
+        for i in range(n):
+            for j in range(i, n):
+                fpp = f(x + h*I[i] + h*I[j])
+                fpm = f(x + h*I[i] - h*I[j])
+                fmp = f(x - h*I[i] + h*I[j])
+                fmm = f(x - h*I[i] - h*I[j])
+                Hij = (fpp - fpm - fmp + fmm) / (4.0 * h * h)
+                H[i, j] = Hij
+                H[j, i] = Hij
+        return H
+
+    H = numerical_hessian(neg_log_post, theta_hat, h=1e-4)
+
+    # 6) Laplace covariance Σθ is the inverse Hessian of the negative log-posterior
+    #    (i.e., the inverse of the observed information). Add a small jitter for stability.
+    H = 0.5 * (H + H.T)  # symmetrize numerically
+    jitter = 1e-8
+    try:
+        Sigma_theta = np.linalg.inv(H + jitter * np.eye(H.shape[0]))
+    except np.linalg.LinAlgError:
+        # Fall back to pseudoinverse if ill-conditioned
+        Sigma_theta = np.linalg.pinv(H + 1e-6 * np.eye(H.shape[0]))
+
+    # 7) Return the reparameterized Gaussian posterior object
+    return mvn_reparameterized(theta_mean=theta_hat, theta_cov=Sigma_theta)
 
 
 
@@ -723,4 +852,5 @@ def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
 if __name__ == "__main__":
 
     main()
+
 
