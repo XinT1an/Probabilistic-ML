@@ -605,15 +605,166 @@ Uses memoization to speed up repeated runs.
 """
 
 @disk_memoize()
-def metropolis_hastings(n_samples, gamma_param, nu_param, plot_traces=False):
-    # Students: implement Metropolis-Hastings here.
-    # Before starting, make sure the prior and likelihood are implemented.
-    # Note: you may change, add, or remove input parameters depending on your design
-    # (e.g. pass initialization values like those prepared in main()).
+def metropolis_hastings(n_samples, y, gtab, S0_init, D_init, gamma_prop_param, theta_prop_scale, plot_traces=False):
+    """
+    Metropolis-Hastings sampler for DTI Bayesian model.
 
-    raise NotImplementedError
+    Parameters
+    ----------
+    n_samples : int
+        Number of samples to generate
+    y : ndarray
+        Observed diffusion signal
+    gtab : GradientTable
+        Gradient information
+    S0_init : float
+        Initial value for S0
+    D_init : ndarray (3, 3)
+        Initial diffusion tensor
+    gamma_prop_param : float
+        Proposal scale for Gamma-distributed parameters (S0, eigenvalues)
+    theta_prop_scale : float
+        Proposal scale for theta parameters (rotation)
+    plot_traces : bool
+        Whether to plot trace plots for debugging
+
+    Returns
+    -------
+    S0_samples : ndarray (n_samples,)
+        Samples of S0 parameter
+    evals_samples : ndarray (n_samples, 3)
+        Samples of eigenvalues
+    evecs_samples : ndarray (n_samples, 3, 3)
+        Samples of eigenvectors
+    """
+    
+    # Initialize prior and likelihood
+    prior = frozen_prior()
+    likelihood = frozen_likelihood(gtab, y)
+    
+    # Get initial eigenvalues and eigenvectors from D_init
+
+    evals_init, evecs_init = np.linalg.eigh(D_init)
+    
+    # Sort eigenvalues and rearrange eigenvectors accordingly
+    idx = evals_init.argsort()[::-1]  
+    current_evals = evals_init[idx]
+    current_evecs = evecs_init[:, idx]
+    current_S0 = S0_init
+    
+    # Storage for samples
+    S0_samples = np.zeros(n_samples)
+    evals_samples = np.zeros((n_samples, 3))
+    evecs_samples = np.zeros((n_samples, 3, 3))
+    
+    # Calculate current log-posterior
+    current_log_prior = prior.logpdf(current_S0, current_evals, current_evecs)
+    current_log_likelihood = likelihood.logpdf(current_S0, current_evecs, current_evals)
+    current_log_posterior = current_log_prior + current_log_likelihood
+    
+    # Acceptance counters
+    accept_S0 = 0
+    accept_evals = 0
+    accept_evecs = 0
+    total_S0_proposals = 0
+    total_evals_proposals = 0
+    total_evecs_proposals = 0
+    
+    print("Starting Metropolis-Hastings sampling...")
+    
+    for i in range(n_samples):
+        if i % 10000 == 0 and i > 0:
+            print(f"Sample {i}/{n_samples}, Acceptance rates: "
+                  f"S0: {accept_S0/total_S0_proposals:.3f}, "
+                  f"Evals: {accept_evals/total_evals_proposals:.3f}, "
+                  f"Evecs: {accept_evecs/total_evecs_proposals:.3f}")
+
+        # --- Block 1: Propose new S0 ---
+        total_S0_proposals += 1
+        # Log-normal proposal for S0 (ensures positivity)
+        proposed_S0 = current_S0 * np.exp(gamma_prop_param * np.random.randn())
+        
+        proposed_log_prior = prior.logpdf(proposed_S0, current_evals, current_evecs)
+        # Likelihood only needs to be recomputed for S0
+        proposed_log_likelihood = likelihood.logpdf(proposed_S0, current_evecs, current_evals)
+        proposed_log_posterior = proposed_log_prior + proposed_log_likelihood
+        
+        # Log acceptance ratio for S0 (symmetric proposal in log-space)
+        log_alpha_S0 = proposed_log_posterior - current_log_posterior
+        
+        if np.log(np.random.rand()) < log_alpha_S0:
+            current_S0 = proposed_S0
+            current_log_posterior = proposed_log_posterior
+            accept_S0 += 1
+        
+        # --- Block 2: Propose new eigenvalues (evals) ---
+        total_evals_proposals += 1
+        # Log-normal proposal for evals (ensures positivity)
+        proposed_evals_unsorted = current_evals * np.exp(gamma_prop_param * np.random.randn(3))
+        
+        # --- CRITICAL FIX: Sort the proposed eigenvalues (descending) ---
+        # Get the indices that sort the array
+        idx_evals = proposed_evals_unsorted.argsort()[::-1]
+        proposed_evals = proposed_evals_unsorted[idx_evals]
+        
+        proposed_log_prior = prior.logpdf(current_S0, proposed_evals, current_evecs)
+        # Likelihood uses the new, sorted evals
+        proposed_log_likelihood = likelihood.logpdf(current_S0, current_evecs, proposed_evals)
+        proposed_log_posterior = proposed_log_prior + proposed_log_likelihood
+        
+        # Log acceptance ratio for eigenvalues
+        log_alpha_evals = proposed_log_posterior - current_log_posterior
+        
+        if np.log(np.random.rand()) < log_alpha_evals:
+            # --- CRITICAL FIX: Re-order the eigenvectors to match the new evals ---
+            # The current_evecs are ordered to match current_evals.
+            # To match the new, sorted proposed_evals, we must re-order the columns
+            # of current_evecs using the same sorting indices.
+            current_evecs = current_evecs[:, idx_evals]
+            
+            current_evals = proposed_evals
+            current_log_posterior = proposed_log_posterior
+            accept_evals += 1
+        
+        # --- Block 3: Propose new eigenvectors (evecs) ---
+        total_evecs_proposals += 1
+        
+        # Generate small random rotation
+        # Use a Gaussian distribution for axis-angle/Rodrigues vector for small steps
+        rotvec = theta_prop_scale * np.random.randn(3)
+        R = Rotation.from_rotvec(rotvec).as_matrix()
+        
+        # Apply rotation to current eigenvectors
+        # Use R.T or R depending on convention, sticking to your original R.T
+        proposed_evecs = current_evecs @ R.T
+        
+        proposed_log_prior = prior.logpdf(current_S0, current_evals, proposed_evecs)
+        # Likelihood uses the new evecs
+        proposed_log_likelihood = likelihood.logpdf(current_S0, proposed_evecs, current_evals)
+        proposed_log_posterior = proposed_log_prior + proposed_log_likelihood
+        
+        # Log acceptance ratio for eigenvectors (symmetric proposal on SO(3) for small steps)
+        log_alpha_evecs = proposed_log_posterior - current_log_posterior
+        
+        if np.log(np.random.rand()) < log_alpha_evecs:
+            current_evecs = proposed_evecs
+            current_log_posterior = proposed_log_posterior
+            accept_evecs += 1
+        
+        # Store sample
+        S0_samples[i] = current_S0
+        evals_samples[i] = current_evals
+        evecs_samples[i] = current_evecs
+    
+    # Print final acceptance rates
+    print(f"Final acceptance rates:")
+    print(f"S0: {accept_S0/total_S0_proposals:.3f}")
+    print(f"Eigenvalues: {accept_evals/total_evals_proposals:.3f}")
+    print(f"Eigenvectors: {accept_evecs/total_evecs_proposals:.3f}")
+    
 
     return S0_samples, evals_samples, evecs_samples
+
 
 
 @disk_memoize()
@@ -759,9 +910,20 @@ def main():
     n_samples = 10000
 
     # Run Metropolis–Hastings and plot results
-    S0_mh, evals_mh, evecs_mh = metropolis_hastings(force_recompute=False)
-    burn_in = 0
-    plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:, :, :], evec_principal, method="mh")
+    S0_mh, evals_mh, evecs_mh = metropolis_hastings(
+    n_samples, 
+    y, 
+    gtab, 
+    S0_init, 
+    D_init, 
+    gamma_prop_param=0.065, 
+    theta_prop_scale=0.03, 
+    plot_traces=False
+    )
+
+    burn_in = 5000
+
+    plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:,:,:], evec_principal, method="mh")
 
     # Run Importance Sampling and plot results
     w_is, S0_is, evals_is, evecs_is = importance_sampling(force_recompute=False)
@@ -852,5 +1014,6 @@ def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
 if __name__ == "__main__":
 
     main()
+
 
 
