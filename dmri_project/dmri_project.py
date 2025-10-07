@@ -401,57 +401,57 @@ These are required before any inference method can be attempted.
 """
 
 class frozen_prior:
-  def __init__(self,
-                 alpha_S=2.0, theta_S=500.0,    
-                 alpha_L=4.0, theta_L=2.5e-4,   
-                 random_state=None):
-        # Store hyperparameters
-        self.alpha_S = float(alpha_S)
-        self.theta_S = float(theta_S)
-        self.alpha_L = float(alpha_L)
-        self.theta_L = float(theta_L)
+    def __init__(self,
+                    alpha_S=2.0, theta_S=500.0,    
+                    alpha_L=4.0, theta_L=2.5e-4,   
+                    random_state=None):
+            # Store hyperparameters
+            self.alpha_S = float(alpha_S)
+            self.theta_S = float(theta_S)
+            self.alpha_L = float(alpha_L)
+            self.theta_L = float(theta_L)
 
-        self._gamma_S = gamma(a=self.alpha_S, scale=self.theta_S)
-        self._gamma_L = gamma(a=self.alpha_L, scale=self.theta_L)
+            self._gamma_S0 = gamma(a=self.alpha_S, scale=self.theta_S)
+            self._gamma_L = gamma(a=self.alpha_L, scale=self.theta_L)
 
-        self.random_state = (np.random.RandomState(random_state)
-                             if random_state is not None else np.random)
+            self.random_state = (np.random.RandomState(random_state)
+                                if random_state is not None else np.random)
 
-  def rvs(self, size=1):
-    # draw prior samples
-    size = int(size)
-    # S0 = Gamma(alpha_S, theta_S)
-    S0 = self._gamma_S0.rvs(size=size, random_state=self.random_state).astype(float)
-    # Lambdai = iid Gamma(alpha_Lambda, theta_Lambda)
-    # eigen values
-    evals = self._gamma_L.rvs(size=(size, 3), random_state=self.random_state).astype(float)
-    # V= Uniform(S0(3))
-    Vs = Rotation.random(size=size, random_state=self.random_state).as_matrix().astype(float)
+    def rvs(self, size=1):
+        # draw prior samples
+        size = int(size)
+        # S0 = Gamma(alpha_S, theta_S)
+        S0 = self._gamma_S0.rvs(size=size, random_state=self.random_state).astype(float)
+        # Lambdai = iid Gamma(alpha_Lambda, theta_Lambda)
+        # eigen values
+        evals = self._gamma_L.rvs(size=(size, 3), random_state=self.random_state).astype(float)
+        # V= Uniform(S0(3))
+        Vs = Rotation.random(size=size, random_state=self.random_state).as_matrix().astype(float)
 
-    order = np.argsort(evals, axis=1)[:, ::-1]
-    evals_sorted = np.take_along_axis(evals, order, axis=1) # eigenvalues sorted in descending order
+        order = np.argsort(evals, axis=1)[:, ::-1]
+        evals_sorted = np.take_along_axis(evals, order, axis=1) # eigenvalues sorted in descending order
 
-    # columns of V match the sorted eigenvalues
-    evecs_sorted = np.stack(
-      [Vs[i][:, order[i]] for i in range(size)],
-      axis=0
-    )
-    return S0.reshape(size,), evals_sorted.reshape(size, 3), evecs_sorted.reshape(size, 3, 3)
+        # columns of V match the sorted eigenvalues
+        evecs_sorted = np.stack(
+        [Vs[i][:, order[i]] for i in range(size)],
+        axis=0
+        )
+        return S0.reshape(size,), evals_sorted.reshape(size, 3), evecs_sorted.reshape(size, 3, 3)
                  
     
     def logpdf(self, S0, evecs=None, evals=None, D=None):
-      S0 = np.asarray(S0, dtype=float).reshape(-1)
-      evals = np.asarray(evals, dtype=float).reshape(-1, 3)
-      # ensure batch sizes line up
-      B = max(S0.shape[0], evals.shape[0])
-      if S0.shape[0] == 1 and B > 1:
-        S0 = np.repeat(S0, B)
-      if evals.shape[0] == 1 and B > 1:
-        evals = np.repeat(evals, B, axis=0)
-      # log-gamma for S0 and each lambda
-      lp_S0 = self._gamma_S0.logpdf(S0)
-      lp_l = np.sum(self._gamma_l.logpdf(evals), axis=1)
-      return (lp_S0 + lp_l).reshape(B,)
+        S0 = np.asarray(S0, dtype=float).reshape(-1)
+        evals = np.asarray(evals, dtype=float).reshape(-1, 3)
+        # ensure batch sizes line up
+        B = max(S0.shape[0], evals.shape[0])
+        if S0.shape[0] == 1 and B > 1:
+            S0 = np.repeat(S0, B)
+        if evals.shape[0] == 1 and B > 1:
+            evals = np.repeat(evals, B, axis=0)
+        # log-gamma for S0 and each lambda
+        lp_S0 = self._gamma_S0.logpdf(S0)
+        lp_l = np.sum(self._gamma_L.logpdf(evals), axis=1)
+        return (lp_S0 + lp_l).reshape(B,)
         
 
 
@@ -637,7 +637,7 @@ def metropolis_hastings(n_samples, y, gtab, S0_init, D_init, gamma_prop_param, t
     
     # Initialize prior and likelihood
     prior = frozen_prior()
-    likelihood = frozen_likelihood(gtab, y)
+    likelihood = frozen_likelihood(y=y, gtab=gtab, sigma=29.0)
     
     # Get initial eigenvalues and eigenvectors from D_init
 
@@ -655,7 +655,7 @@ def metropolis_hastings(n_samples, y, gtab, S0_init, D_init, gamma_prop_param, t
     evecs_samples = np.zeros((n_samples, 3, 3))
     
     # Calculate current log-posterior
-    current_log_prior = prior.logpdf(current_S0, current_evals, current_evecs)
+    current_log_prior = prior.logpdf(current_S0, evals=current_evals, evecs=current_evecs)
     current_log_likelihood = likelihood.logpdf(current_S0, current_evecs, current_evals)
     current_log_posterior = current_log_prior + current_log_likelihood
     
@@ -681,7 +681,7 @@ def metropolis_hastings(n_samples, y, gtab, S0_init, D_init, gamma_prop_param, t
         # Log-normal proposal for S0 (ensures positivity)
         proposed_S0 = current_S0 * np.exp(gamma_prop_param * np.random.randn())
         
-        proposed_log_prior = prior.logpdf(proposed_S0, current_evals, current_evecs)
+        proposed_log_prior = prior.logpdf(proposed_S0, evals=current_evals, evecs=current_evecs)
         # Likelihood only needs to be recomputed for S0
         proposed_log_likelihood = likelihood.logpdf(proposed_S0, current_evecs, current_evals)
         proposed_log_posterior = proposed_log_prior + proposed_log_likelihood
@@ -704,7 +704,7 @@ def metropolis_hastings(n_samples, y, gtab, S0_init, D_init, gamma_prop_param, t
         idx_evals = proposed_evals_unsorted.argsort()[::-1]
         proposed_evals = proposed_evals_unsorted[idx_evals]
         
-        proposed_log_prior = prior.logpdf(current_S0, proposed_evals, current_evecs)
+        proposed_log_prior = prior.logpdf(current_S0, evals=proposed_evals, evecs=current_evecs)
         # Likelihood uses the new, sorted evals
         proposed_log_likelihood = likelihood.logpdf(current_S0, current_evecs, proposed_evals)
         proposed_log_posterior = proposed_log_prior + proposed_log_likelihood
@@ -735,7 +735,7 @@ def metropolis_hastings(n_samples, y, gtab, S0_init, D_init, gamma_prop_param, t
         # Use R.T or R depending on convention, sticking to your original R.T
         proposed_evecs = current_evecs @ R.T
         
-        proposed_log_prior = prior.logpdf(current_S0, current_evals, proposed_evecs)
+        proposed_log_prior = prior.logpdf(current_S0, evals=current_evals, evecs=proposed_evecs)
         # Likelihood uses the new evecs
         proposed_log_likelihood = likelihood.logpdf(current_S0, proposed_evecs, current_evals)
         proposed_log_posterior = proposed_log_prior + proposed_log_likelihood
@@ -840,6 +840,8 @@ def laplace_approximation():
         ll = like.logpdf(S0b, evecs, evals).squeeze()
 
         return -(lp + ll)   
+    
+    
 
     res = minimize(neg_log_post, theta0, method='L-BFGS-B', options=dict(maxiter=500))
     theta_hat = res.x
@@ -871,6 +873,35 @@ def laplace_approximation():
 
     return mvn_reparameterized(theta_mean=theta_hat, theta_cov=Sigma_theta)
 
+import numpy as np
+import dipy.reconst.dti as dti
+
+def summarize_laplace(S0_samples, evals_samples, evecs_samples):
+    # Means
+    S0_mean = np.mean(S0_samples)
+    evals_mean = np.mean(evals_samples, axis=0)
+
+    # 95% credible intervals
+    S0_ci = np.percentile(S0_samples, [2.5, 97.5])
+    evals_ci = np.percentile(evals_samples, [2.5, 97.5], axis=0)
+
+    # Derived metrics
+    MD = dti.mean_diffusivity(evals_samples)
+    FA = dti.fractional_anisotropy(evals_samples)
+
+    MD_mean, MD_ci = np.mean(MD), np.percentile(MD, [2.5, 97.5])
+    FA_mean, FA_ci = np.mean(FA), np.percentile(FA, [2.5, 97.5])
+
+    return {
+        "S0": (S0_mean, *S0_ci),
+        "lambda1": (evals_mean[0], *evals_ci[:,0]),
+        "lambda2": (evals_mean[1], *evals_ci[:,1]),
+        "lambda3": (evals_mean[2], *evals_ci[:,2]),
+        "MD": (MD_mean, *MD_ci),
+        "FA": (FA_mean, *FA_ci)
+    }
+
+
 
 
 """
@@ -895,7 +926,7 @@ def main():
     n_samples = 10000
 
     # Run Metropolis–Hastings and plot results
-    S0_mh, evals_mh, evecs_mh = metropolis_hastings(
+    """ S0_mh, evals_mh, evecs_mh = metropolis_hastings(
     n_samples, 
     y, 
     gtab, 
@@ -908,23 +939,32 @@ def main():
 
     burn_in = 5000
 
-    plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:,:,:], evec_principal, method="mh")
+    plot_results(S0_mh[burn_in:], evals_mh[burn_in:], evecs_mh[burn_in:,:,:], evec_principal, method="mh") """
 
     # Run Importance Sampling and plot results
-    w_is, S0_is, evals_is, evecs_is = importance_sampling(force_recompute=False)
+    """ w_is, S0_is, evals_is, evecs_is = importance_sampling(force_recompute=False)
     plot_results(S0_is, evals_is, evecs_is, evec_principal, weights=w_is, method="is")
 
     # Run Variational Inference and plot results
     posterior_vi = variational_inference(force_recompute=False)
     S0_vi, evals_vi, evecs_vi = posterior_vi.rvs(size=n_samples)
-    plot_results(S0_vi, evals_vi, evecs_vi, evec_principal, method="vi")
+    plot_results(S0_vi, evals_vi, evecs_vi, evec_principal, method="vi") """
 
     # Run Laplace Approximation and plot results
     posterior_laplace = laplace_approximation(force_recompute=False)
     S0_laplace, evals_laplace, evecs_laplace = posterior_laplace.rvs(size=n_samples)
+
+    # >>> Add this summary step <<<
+    stats = summarize_laplace(S0_laplace, evals_laplace, evecs_laplace)
+    print("Laplace summary statistics:")
+    for k, v in stats.items():
+        print(f"{k}: mean={v[0]:.6f}, 95% CI=({v[1]:.6f}, {v[2]:.6f})")
+
+    # Keep your plotting
     plot_results(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="laplace")
 
     print("Done.")
+
 
 
 def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
@@ -965,8 +1005,11 @@ def plot_results(S0, evals, evecs, evec_ref, weights=None, method=""):
     md = dti.mean_diffusivity(evals).squeeze()
     fa = dti.fractional_anisotropy(evals).squeeze()
 
-    # Compute acute angle between estimated and reference eigenvectors
-    angle = 360/(2*np.pi) * np.arccos(np.abs(np.dot(evecs[:, :, 2], evec_ref)))
+    # Compare principal (largest-eigenvalue) eigenvector to the reference
+    cosine = np.einsum('bi,i->b', evecs[:, :, 0], evec_ref)   
+    cosine = np.clip(np.abs(cosine), -1.0, 1.0)               
+    angle = np.degrees(np.arccos(cosine))
+
     
     # Create 2x2 grid of histograms
     fig, axes = plt.subplots(2, 2, figsize=(12, 12), sharey=False)
