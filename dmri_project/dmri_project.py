@@ -411,7 +411,7 @@ class frozen_prior:
         self.alpha_L = float(alpha_L)
         self.theta_L = float(theta_L)
 
-        self._gamma_S= = gamma(a=self.alpha_S, scale=self.theta_S)
+        self._gamma_S = gamma(a=self.alpha_S, scale=self.theta_S)
         self._gamma_L = gamma(a=self.alpha_L, scale=self.theta_L)
 
         self.random_state = (np.random.RandomState(random_state)
@@ -554,8 +554,8 @@ class mvn_reparameterized:
         self.theta_cov = np.asarray(theta_cov, dtype=float)
 
     
-        assert self.theta_mean.shape[0] == 7, 
-        assert self.theta_cov.shape == (7, 7), 
+        assert self.theta_mean.shape[0] == 7 
+        assert self.theta_cov.shape == (7, 7) 
         
     
     def rvs(self, size):
