@@ -424,9 +424,9 @@ class frozen_prior:
     S0 = self._gamma_S0.rvs(size=size, random_state=self.random_state).astype(float)
     # Lambdai = iid Gamma(alpha_Lambda, theta_Lambda)
     # eigen values
-    evals = self_gamma_L.rvs(size=(size, 3), random_state=self.random_state).astype(float)
+    evals = self._gamma_L.rvs(size=(size, 3), random_state=self.random_state).astype(float)
     # V= Uniform(S0(3))
-    Vs = Rotation.random(size=size, ransom_state=self.random_state).as_matrix().astype(float)
+    Vs = Rotation.random(size=size, random_state=self.random_state).as_matrix().astype(float)
 
     order = np.argsort(evals, axis=1)[:, ::-1]
     evals_sorted = np.take_along_axis(evals, order, axis=1) # eigenvalues sorted in descending order
