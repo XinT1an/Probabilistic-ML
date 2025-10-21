@@ -1093,7 +1093,7 @@ def main():
     # Set random seed and number of posterior samples
     np.random.seed(0)
     n_samples = 100000
-    """
+    
     # Run Metropolis–Hastings and plot results
 
     S0_mh, evals_mh, evecs_mh = metropolis_hastings(
@@ -1173,7 +1173,7 @@ def main():
     plot_results(S0_laplace, evals_laplace, evecs_laplace, evec_principal, method="laplace")
 
     print("Done.")
-    """
+
 
     # Run Importance Sampling and plot results
     """
